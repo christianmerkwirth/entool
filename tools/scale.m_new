@@ -1,0 +1,39 @@
+function [y, scalefactors] = scale(x, varargin)
+
+% [y, scalefactors] = scale(x)
+% y = scale(x, scalefactors)
+% 
+% Scales each column of input x to [-1 1].
+% 
+% If scalefactors are passed as second input argument,
+% the result may not be within [-1 1].
+%
+% Anyway, the following will hold:
+%
+% [y, scalefactors] = scale(x);
+% z = scale(x, scalefactors);
+% all(all(z == y))
+% 1
+%
+% Christian Merkwirth 2002
+
+N = size(x, 1);
+
+if nargin > 1
+   scalefactors = varargin{1};
+else
+   scalefactors(1,:) = median(x);           
+   
+   m = sort(abs(x - (ones(N,1) * scalefactors(1,:))));      % absolute deviation
+   m = mean([m(floor(3*N/4),:) ; m(ceil(3*N/4),:)]);        % third quartil
+    
+   scalefactors(2,:) = 3 * m;       
+   
+   scalefactors(2,find(scalefactors(2,:) == 0)) = 1;    % inf
+end
+
+y = x - (ones(N,1) * scalefactors(1,:));
+y = y ./ (ones(N,1) * scalefactors(2,:)); 
+
+%y = 2*y - 1;
+%y(:,find(scalefactors(2,:) == inf)) = 0;

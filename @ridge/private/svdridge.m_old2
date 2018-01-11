@@ -1,0 +1,135 @@
+function [beta, mx, Sd, gcverrs, optimallambda] = svdridge(x, y, lambda, svdcutoff, epsilon, sampleweights)
+
+% function [beta,mx, Sd, gcverrs, optimallambda] = svdridge(x, y, lambda, svdcutoff, epsilon, (sampleweights))
+%
+% If a vector of lambdas is given, the algorithm will try to choose the one
+% with results in least GCV (generalized cross validation error).
+%
+%
+% Christian Merkwirth 2003
+
+
+[N,D] = size(x);
+
+lambda = lambda .* lambda;
+svdcutoff = svdcutoff * sqrt(N);
+
+mx = sum(x,1) / N;
+X = x - repmat(mx,N,1);
+stdX = sqrt(sum(X.*X,1) / N);
+
+ind = find(stdX < 1e-10);
+stdX(ind) = inf;
+
+X = X ./ repmat(stdX,N,1);
+X = [X ones(N,1)];
+
+if nargin > 5
+    w = sqrt(sampleweights / sum(sampleweights));
+    if (D+1) < N
+        [U,S,V] = svd(full(sparse((1:N)',(1:N)', w) * X),0);
+    else
+        [U,S,V] = svd(full(sparse((1:N)',(1:N)', w) * X));    
+    end
+else
+    if (D+1) < N
+        [U,S,V] = svd(X,0);
+    else
+        [U,S,V] = svd(X);    
+    end
+    w = ones(N,1);
+end
+
+
+% Alternative way to compute 
+%beta = inv(X'*X + diag([(lambda*lambda * ones(D,1)); 0])) * X' * y;
+% beta = V * inv(S.*S + V' * diag([(lambda*lambda * ones(D,1)); 0]) * V) * diag(S1) * U'* y;
+
+% Application of Sherman Morrison formula for this special diagonal basic matrix 
+% See Numerical Recipes
+% We set :
+% A = S * S + lm * I
+% Ad = diag(A^(-1))
+% B = (A + V' * diag([0 0 0 0 0 1]) * V)
+% Bi = B^(-1)
+
+Sd = diag(S);
+
+%bar(Sd);  pause
+
+ind = find(Sd <= svdcutoff);
+Sd(ind) = inf;
+
+betas = [];
+gcverrs = [];   % generalized cross-validation errors
+
+for lm = lambda(:)'
+    Ad = 1./ (Sd.*Sd + lm);
+    
+    if length(Ad) < size(X,2)
+        % in case we have more variables than observations, cut sizes of
+        % matrices
+        S = S(:, 1:size(S,1));
+    end
+    
+    u = V(end,:)';
+    z = u(1:min(length(u), length(Ad)))  .* Ad;
+    b = u(1:min(length(u), length(Ad)))' * z;
+    Bi = diag(Ad) - (-lm) * (z * z')/(1.0 + (-lm) * b);
+    
+    A = V(:,1:min(size(V,2), size(Bi,1))) * Bi * S * U';
+    
+    if epsilon > 0
+        % compute this matrix only once to save computations
+        
+        beta = A * (w.* y);
+        
+        lss_old = inf;
+        
+        for iter = 1:50
+            yh = X * beta;
+            
+            % lss is the total loss that is used as a minimization criterion,
+            % that is the epsilon-insensitive squared loss plus the ridge
+            % penalty (the last element of beta stores the intercept, so it is
+            % not included in the penalty).
+            
+            if nargin > 5
+                lss = N*epsinloss(y, yh, epsilon, sampleweights) + lm * beta(1:(end-1))'* beta(1:(end-1));
+            else
+                lss = N*epsinloss(y, yh, epsilon) + lm * beta(1:(end-1))'* beta(1:(end-1));
+            end
+            %disp(lss)
+            
+            if lss > lss_old
+                break
+            end
+            
+            lss_old = lss;
+            
+            g = y - yh;
+            g(find(g > epsilon)) = epsilon;
+            g(find(g < -epsilon)) = - epsilon;
+            
+            beta = A * (w .* (y-g));
+        end
+    else
+        beta = A * (w.* y);
+    end
+    
+    yh = X * beta;
+    yhgcv = (yh-y)./(1-diag(X*A).*w) + y;
+    
+    betas(:,end+1) = beta;
+    gcverrs(1,end+1) = relepsinloss(y, yhgcv, epsilon, w); 
+end
+
+[dummy,ind] = min(gcverrs);
+
+beta = betas(:,ind);
+optimallambda = sqrt(lambda(ind));
+
+beta(1:D) = beta(1:D) ./ stdX';
+
+%disp(gcverrs)
+

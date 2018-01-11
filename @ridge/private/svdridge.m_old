@@ -1,0 +1,67 @@
+function [beta, mx, sd] = svdridge(x, y, lambda, svdcutoff, epsilon)
+
+% function [beta,mx, sd] = svdridge(x, y, lambda, svdcutoff, epsilon)
+%
+% Christian Merkwirth 2003
+
+
+[N,D] = size(x);
+
+lm = lambda * lambda;
+svdcutoff = svdcutoff * sqrt(N);
+
+mx = sum(x,1) / N;
+X = x - repmat(mx,N,1);
+stdX = sqrt(sum(X.*X,1) / N);
+
+ind = find(stdX < 1e-10);
+stdX(ind) = inf;
+
+X = X ./ repmat(stdX,N,1);
+X = [X ones(N,1)];
+
+if epsilon > 0
+    % in case we have a positive epsilon, we have to use an approximation
+    % algorithm eLSSLI proposed by Jacek M. Leski as described in
+    % $\varepsilon$-Insensitive Learning Techniques for Approximate Reasoning Systems (2003)  
+    X = [X ; -X];        
+    y = [(y-epsilon); (-y-epsilon)];
+end
+
+[U,S,V] = svd(X,0);
+
+% Alternative way to compute 
+%beta = inv(X'*X + diag([(lambda*lambda * ones(D,1)); 0])) * X' * y;
+% beta = V * inv(S.*S + V' * diag([(lambda*lambda * ones(D,1)); 0]) * V) * diag(S1) * U'* y;
+
+% Application of Sherman Morrison formula for this special diagonal basic matrix 
+% See Numerical Recipes
+% We set :
+% A = S * S + lm * I
+% Ad = diag(A^(-1))
+% B = (A + V' * diag([0 0 0 0 0 1]) * V)
+% Bi = B^(-1)
+
+Sd = diag(S);
+ind = find(Sd <= svdcutoff);
+Sd(ind) = inf;
+Ad = 1./ (Sd.*Sd + lm);
+
+u = V(end,:)';
+z = u .* Ad;
+b = u' * z;
+Bi = diag(Ad) - (-lm) * (z * z')/(1.0 + (-lm) * b);
+
+if epsilon > 0
+    margin = 1e-6 * rand(size(y));
+    for iter = 1:20
+        beta = V * Bi * S * U' * (y+margin);
+        yh = X * beta;
+        e = yh - y - margin;
+        margin = margin + 0.1 * (e + abs(e));
+    end
+    beta(1:D) = beta(1:D) ./ stdX';   
+else
+    beta = V * Bi * S * U' * y;
+    beta(1:D) = beta(1:D) ./ stdX';
+end

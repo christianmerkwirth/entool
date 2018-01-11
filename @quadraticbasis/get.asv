@@ -1,0 +1,27 @@
+function value = get(model, param)
+
+% function value = get(model, param)
+%
+% Access properties of object.
+%
+% Christian Merkwirth 2002
+
+value = [];
+
+switch(lower(param))
+    case 'trainparams'
+        value = get(model.ensemble, 'trainparams');
+        
+        if isempty(value)
+            value.scaledata = 1;
+            
+  
+            value.modelclasses = {'vicinalclass', [], {}};
+        end
+    case 'features'
+        value = get(model.ensemble, 'subspaces');    % return index of features selected
+    otherwise
+        value = get(model.ensemble, param);
+        %warning(['Parameter ' param ' is not element of class ensemble'])
+end
+

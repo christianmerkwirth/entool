@@ -1,0 +1,15 @@
+function xx = qbasisexpand(x)
+
+% function xx = qbasisexpand(x)
+%
+% Expand to quadratic basis
+%
+%
+% Christian Merkwirth 2004
+
+[N,D] = size(x);
+
+xx = zeros(D
+
+xx = [x (x.*x)];
+

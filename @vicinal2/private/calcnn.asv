@@ -1,0 +1,18 @@
+function [nn, d, querypoints] = calcnn(atria, urbilder)
+
+% function [nn, d, querypoints] = calcnn(atria, urbilder)
+%
+% Christian Merkwirth 2002
+
+
+if isempty(urbilder)
+   querypoints = atria.dataset;   
+   [nn,d] = nn_search(atria.dataset, atria.searcher, (1:size(atria.dataset, 1))', atria.k, atria.trainparams.exclude);
+else
+        atria
+        whos
+        
+        
+    querypoints = urbilder * atria.metric(:);
+	[nn,d] = nn_search(atria.dataset, atria.searcher, querypoints, atria.k); 
+end

@@ -1,0 +1,25 @@
+function mut = fastmutinfo(x,y)
+
+% function mut = fastmutinfo(x,y)
+%
+% Compute crude, but fast approximation to mutual information of all
+% columns of input matrix x versus output vector y.
+%
+% The output mut will be a vector of length p (when x is a matrix of N by p).
+% 
+%
+% Christian Merkwirth 
+
+[N,p] = size(x);
+
+X = scale
+
+
+mut = zeros(1,p);
+
+nr_bins = ceil(sqrt(N/8));
+
+for i=1:p
+    [dummy,q] = boxcount([y x(:,i)], nr_bins)
+    mut(i) = q(2) - q(1);    
+end

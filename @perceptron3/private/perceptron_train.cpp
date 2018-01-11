@@ -1,0 +1,230 @@
+#include <stdio.h>
+#include <math.h>
+#include <vector.h>
+#include <algo.h>
+
+// Compile with mex  -I../../../../../entool -I../../../entool/ perceptron_train.cpp  perceptron.cpp  -O -v
+
+#include "mextools/mextools.h"
+#include "perceptron.h"
+
+int verbose = 0;
+
+
+pair<vector<double>, vector<double> > rprop_train(mmatrix& x, network& net, const double* y, 
+                    const int nr_epochs, const double eps, const int mode, const vector<double>& sampleweights, const double decay, 
+                    const double weightlimit)
+{
+    const long nr_samples = x.getM();
+    vector<double> train_err; 
+    vector<double> yh(nr_samples);
+     
+    double lasterr = 1e20;
+    double sum_squared_weights = net.rprop_step(0.0, 0.0, weightlimit);
+
+    
+    for (long epoch = 0; epoch < nr_epochs; epoch++) {
+        vector< pair<vector<double>, vector<double> > > activations(net.nr_layers); 
+        
+        double err = 0.0;
+        
+        for (long i=0; i < nr_samples; i++) {    
+            activations[0] = forward(x.row_begin(i+1), net.layers[0]);
+            
+            for (long l=1; l < net.nr_layers; l++) {
+                activations[l] = forward(activations[l-1].first.begin(), net.layers[l]);
+            }
+         
+            yh[i] = net.offset.weight + activations[net.nr_layers-1].first[0]; 
+            
+            const pair<double, double> r = myloss(y[i], yh[i], eps, mode);
+            
+            const double e(r.first * sampleweights[i]);       // loss for this sample
+            const double d(r.second * sampleweights[i]);       // derivate of loss for this sample
+                        
+            err += e;  // accumulate error
+            
+            // Backward step
+            if (d) {
+                net.offset.grad += d;
+                vector<double> g(1,d);
+                
+                for (long l=net.nr_layers-1; l > 0; l--) {
+                    g = backward(g, activations[l].second, activations[l-1].first.begin(), net.layers[l]);
+                }
+                
+                backward(g, activations[0].second, x.row_begin(i+1), net.layers[0]);            
+            }       
+        }
+        
+        // important, since we use a decay which is equivalent to ridge regression, the error (loss) we try to minimize
+        // is not just the error on the samples, but also the additional penalty term
+        err += 0.5 * decay * sum_squared_weights;
+        
+        err /= nr_samples;
+        
+        train_err.push_back(err);
+    
+        if (verbose) {
+            mexPrintf("%f\n", err);
+            fflush(stdout);
+        }    
+        
+        if (err == 0)
+            break;
+        
+        sum_squared_weights = net.rprop_step(err, lasterr, weightlimit);
+        lasterr = err;
+    }
+    
+    return make_pair(train_err, yh);
+}
+
+mxArray* store_states(const vector<state>& v, const int m, const int n)
+{
+    mxArray* output = mxCreateDoubleMatrix(m, n, mxREAL);  
+    
+    double* ptr = mxGetPr(output);
+    
+    for (long i=0; i < v.size(); i++) {
+            ptr[i] = v[i].weight;
+    }
+    
+    return output;
+}
+
+
+void mexFunction(int nlhs, mxArray  *plhs[], int nrhs, const mxArray  *prhs[])       
+{                   
+	if (nrhs < 3) {
+		mexErrMsgTxt("[net, offset, yh, trainerr] = perceptron_train(x, y, \n [topology], [nr_epochs epsilon lossmode weightinit stepinit weightdecay weightlimit], (sampleweights), (verbose))\n");
+		return;
+	}
+	if (nrhs > 5) {
+	    verbose = (int) *mxGetPr(prhs[5]);
+	} else {
+	    verbose = 0;
+	}
+	    
+	
+	if (mxGetM(prhs[2])*mxGetN(prhs[2]) < 1) {
+		mexErrMsgTxt("Third argument must be [nr_hidden_neurons1 nr_hidden_neurons2 nr_hidden_neurons3 ...) \n");
+		return;
+	}
+	
+	const int nr_layers = mxGetM(prhs[2])*mxGetN(prhs[2]);     // number of layers
+	if (nr_layers < 0)  {
+		mexErrMsgTxt("number of layers must be zero or higher \n");
+		return;
+	}
+	
+	mmatrix x(prhs[0]);
+	const long nr_samples = mxGetM(prhs[0]);
+	const long dimension = mxGetN(prhs[0]);
+	
+    if (verbose)
+        mexPrintf("Total number of samples of dimension %d : %d\n", dimension, nr_samples);
+			
+     if (mxGetM(prhs[1])*mxGetN(prhs[1]) != nr_samples)  {
+		    mexErrMsgTxt("number of training images (outputs) must be equal to number of training inputs \n");
+		    return;
+	 }      
+	 
+    vector<int> topology(nr_layers+2);
+    
+    topology[0] = dimension;    // input of first layer must accept one input vector
+	copy(&(mxGetPr(prhs[2])[0]), &(mxGetPr(prhs[2])[nr_layers]), ++(topology.begin()));
+	topology[nr_layers+1] = 1;	 // output of last layer shall be a scalar
+	
+	    
+    const double* y = mxGetPr(prhs[1]);     // training images    
+        
+    // Get optinional training parameters
+    
+    int nr_epochs = 150;      // number of training iterations (epoch)
+    double epsilon = 0.0;     // parameter of the eps-insensitive loss function
+    int lossmode = 0;         // = 0 means quadratic loss, = 1 means absolut loss
+    double weightinit = 0.4;  // parameter for random weight initialization
+    double stepinit = 0.04;    // initial stepsize of iRPROP+ or stochastic gradient descent, also used as initial mu
+    double weightdecay = 0.0;   // weight decay parameter
+    double weightlimit = 2.0;   // limit weights for RPROP training
+    
+    if (nrhs > 3) {
+        if (mxGetM(prhs[3])*mxGetN(prhs[3]) > 0)
+            nr_epochs = (long) mxGetPr(prhs[3])[0];     
+        if (mxGetM(prhs[3])*mxGetN(prhs[3]) > 1)
+            epsilon =   mxGetPr(prhs[3])[1];    
+        if (mxGetM(prhs[3])*mxGetN(prhs[3]) > 2)
+            lossmode = (long) mxGetPr(prhs[3])[2];     
+        if (mxGetM(prhs[3])*mxGetN(prhs[3]) > 3)
+            weightinit = mxGetPr(prhs[3])[3];          
+        if (mxGetM(prhs[3])*mxGetN(prhs[3]) > 4)
+            stepinit =  mxGetPr(prhs[3])[4];     
+        if (mxGetM(prhs[3])*mxGetN(prhs[3]) > 5)
+            weightdecay =  mxGetPr(prhs[3])[5];       
+        if (mxGetM(prhs[3])*mxGetN(prhs[3]) > 6)
+            weightlimit = (long) mxGetPr(prhs[3])[6]; 
+    }     
+        
+    if (verbose)
+        mexPrintf("nr_epochs %d \neps  %f\nLossmode %d\nWeightinit %f\nStepinit %f\nDecay %f\nweightlimit %f\n", 
+            nr_epochs, epsilon, lossmode, weightinit, stepinit, weightdecay, weightlimit);
+        
+    if (verbose) {
+                
+        for (int i=0; i < topology.size(); i++)
+            mexPrintf("number of hidden neurons for layer %d : %d\n", i+1, topology[i]);
+           
+        mexPrintf("Size of struct state : %d\n", sizeof(state));
+    }
+	
+    vector<double> sampleweights(nr_samples);
+    
+    if (nrhs>4) {
+        const double* ptr = mxGetPr(prhs[4]);
+        
+    	if (mxGetM(prhs[4])*mxGetN(prhs[4]) != nr_samples)  {
+		    mexErrMsgTxt("number of sampleweights must be equal to number of molecules \n");
+		    return;
+	    }    
+	    
+	    copy(ptr, ptr+nr_samples, sampleweights.begin());
+    } else {
+        fill(sampleweights.begin(), sampleweights.end(), 1.0);
+    }
+    
+    // Create and initialize network. Here we specifiy network topology, but also which weights are actually used for the specific data
+    // set read in above into variable mols. This will save a lot of updating work during the training phase
+    
+    weightdecay *= nr_samples;
+
+    network net(topology);
+    
+    net.initialize(weightinit, stepinit, weightdecay);
+	pair<vector<double>,vector<double> > ret_val = rprop_train(x, net, y, nr_epochs, epsilon, lossmode, sampleweights, weightdecay, weightlimit); 
+
+	vector<double> train_err(ret_val.first);
+	vector<double> yh(ret_val.second);
+	
+    plhs[0] = mxCreateCellMatrix(net.nr_layers, 1);   
+ 
+    for (int i=0; i < net.nr_layers; i++) {
+        mxSetCell(plhs[0],i,store_states(net.layers[i].weights, net.layers[i].nr_inputs, net.layers[i].nr_outputs));
+    }
+        
+    plhs[1] = mxCreateDoubleMatrix(1, 1, mxREAL);  
+ 
+    *(mxGetPr(plhs[1])) = net.offset.weight;
+	    
+    plhs[2] = mxCreateDoubleMatrix(yh.size(),1, mxREAL);  
+    double* const yh_ptr = mxGetPr(plhs[2]);
+    copy(yh.begin(), yh.end(), yh_ptr);
+
+    plhs[3] = mxCreateDoubleMatrix(train_err.size(),1, mxREAL);  
+  
+    double* const train_err_ptr = mxGetPr(plhs[3]);
+    copy(train_err.begin(),train_err.end(), train_err_ptr);
+    
+  
+}
+

@@ -1,0 +1,14 @@
+function model = extend(model, urbilder, bilder)
+
+% function model = extend(model, urbilder, bilder)
+% Extend the data
+
+for i=1:length(model)
+	metricclass = model(i).searcher.optional;
+	x = urbilder .* repmat(model(i).metric, size(urbilder, 1), 1);
+	atria = nn_prepare(x, metricclass);
+
+	model(i).searcher = atria;
+	model(i).dataset = x;
+	model(i).images = bilder;
+end

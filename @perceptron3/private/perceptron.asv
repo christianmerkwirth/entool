@@ -1,0 +1,403 @@
+#ifndef PERCEPTRON_H
+#define PERCEPTRON_H
+
+#include <stdio.h>
+#include <math.h>
+#include <vector.h>
+#include <algo.h>
+
+#include "mextools/mextools.h"
+#include "mextools/random.h"
+#include "mextools/sigmoids.h"
+
+static Random<MT_RNG> rng;
+
+// Structure state stores the current weight of one entry of a network, together with gradient information
+inline double sign(const double x) {
+    if (x > 0) 
+        return 1.0;
+    else if (x < 0)
+        return -1.0;
+    else
+        return 0.0;
+}
+
+inline double squash(const double x) 
+{
+    if (x > 0) 
+        return (x < 1.0 ? x : log(x)+1.0);
+    else
+        return (x > -1.0 ? x : -(log(-x)+1.0));       
+}
+
+
+// for this weight, stepsize etc.
+class state {
+    public:
+    float weight;
+    
+#ifndef PERCEPTRON_CALC    
+    float grad;
+    float lastgrad;
+    float stepsize;
+    float laststep;
+  
+    double rprop_step(const double err, const double lasterr, const double weightdecay = 0.0, const double weightlimit = 4.0) {
+            grad -= weightdecay * weight;    
+        
+            const double signchange = grad * lastgrad;
+            
+            if (signchange > 0) {
+                const double newstepsize = min(stepsize * 1.2, 1.0);
+                lastgrad = grad;
+                laststep = sign(grad) * newstepsize;
+                weight += laststep;
+                
+                if (weight > weightlimit) {
+                    const double d = weight - weightlimit;
+                    weight -= d;
+                    laststep -= d;
+                } else if (weight < -weightlimit) {
+                    const double d = weight+weightlimit;
+                    weight -= d;
+                    laststep -= d;
+                } else {
+                    stepsize = newstepsize; 
+                }
+            } else if (signchange < 0) {
+                stepsize = max(stepsize * 0.55, 0.00000001);
+                lastgrad = 0;
+                laststep = 0.0;
+                //if (err > lasterr) {
+                    weight -= 0.61803 * laststep;
+                //}    
+            } else {
+                lastgrad = grad;
+                laststep = sign(grad) * stepsize;
+                weight += laststep;
+                
+                if (weight > weightlimit) {
+                    const double d = weight - weightlimit;
+                    weight -= d;
+                    laststep -= d;
+                } else if (weight < -weightlimit) {
+                    const double d = weight+weightlimit;
+                    weight -= d;
+                    laststep -= d;
+                }
+            }
+            
+            grad = 0.0;     // clear gradient information for next round
+            return weight * weight;
+    }
+#endif    
+    
+    state() : weight(0.0) {};
+};
+
+
+class layer {
+    public:
+    
+    int nr_inputs;
+    int nr_outputs;
+    
+    int nonlinearity;
+    
+    double weightdecay; 
+    
+    vector<state> weights;
+    state offset;               // scalar intercept
+    
+    layer(const int NR_inputs, const int NR_outputs, const int Nonlinearity = 1) : 
+        nr_inputs(NR_inputs+1), nr_outputs(NR_outputs), nonlinearity(Nonlinearity),  weightdecay(0.0),
+        weights(nr_inputs * nr_outputs)
+        {};
+       
+    ~layer() {};    
+
+#ifndef PERCEPTRON_CALC    
+    void initialize(const double initial_weightspan, const double initial_stepsize, const double Weightdecay) {
+        
+        weightdecay = Weightdecay;
+        
+        for (long i=0; i < weights.size(); i++) {
+            weights[i].weight = initial_weightspan * (rng()+rng()-1.0);
+            weights[i].grad = 0.0;
+            weights[i].lastgrad = 0.0;
+            weights[i].stepsize = initial_stepsize;
+            weights[i].laststep = 0.0;
+        }
+
+        offset.weight = initial_weightspan * (rng()+rng()-1.0);
+        offset.grad = 0.0;
+        offset.lastgrad = 0.0;
+        offset.stepsize = initial_stepsize;
+        offset.laststep = 0.0;
+    }
+    
+    // perform one iRPROP step 
+    double rprop_step(const double err, const double lasterr, const double weightlimit) {
+        // update only weights actually used
+    
+        double sum_squared_weights = 0.0;
+        
+        for (long i=0; i < weights.size(); i++) {
+            sum_squared_weights += weights[i].rprop_step(err, lasterr, weightdecay, weightlimit);
+        }
+        
+        sum_squared_weights += offset.rprop_step(err, lasterr, weightdecay, weightlimit);
+        
+        return sum_squared_weights;
+    }
+#endif    
+};
+
+
+class network {
+    public:
+        long nr_layers;
+     
+        vector<layer> layers;
+        state offset;
+        
+        double weightdecay;
+        
+        network(const vector<int> topology) : nr_layers(topology.size()-1) 
+        {
+            for (int i=0; i < nr_layers; i++) {
+                if (i == (nr_layers - 1)) {
+                    // no nonlinearity for last layer
+                    layers.push_back(layer(topology[i], topology[i+1]) , 0);
+                } else {
+                    layers.push_back(layer(topology[i], topology[i+1]) , 1);
+                }
+            }
+        };
+        ~network() {};
+        
+#ifndef PERCEPTRON_CALC            
+        void initialize(const double initial_weightspan, const double initial_stepsize, const double Weightdecay) {
+            weightdecay = Weightdecay;
+        
+            // initialize all layers 
+            for (long i=0; i < layers.size(); i++) {
+                layers[i].initialize(initial_weightspan, initial_stepsize, Weightdecay);
+            }
+                
+            offset.weight = initial_weightspan * (rng()+rng()-1.0);
+            offset.grad = 0.0;
+            offset.lastgrad = 0.0;
+            offset.stepsize = initial_stepsize;
+            offset.laststep = 0.0;
+        }
+        
+        // perform one iRPROP step 
+        double rprop_step(const double err, const double lasterr, const double weightlimit) {
+            double sum_squared_weights = 0.0;
+        
+            for (long i=0; i < layers.size(); i++) {
+                sum_squared_weights += layers[i].rprop_step(err, lasterr, weightlimit);    
+            }
+
+            //  No weight decay for this offset
+            offset.rprop_step(err, lasterr, 0.0, weightlimit);
+            
+            return sum_squared_weights;
+        }
+
+#endif        
+};        
+        
+        
+
+// Square and absolute epsilon-insensitive loss functions
+
+
+inline pair<double, double> epsquadloss(const double x, const double y, const double eps)
+{
+    double d = x - y;
+
+    if (d > eps) {
+        d -= eps;
+    } else if (d < -eps)
+    {
+        d += eps;
+    } else {
+        d = 0.0;
+    }
+    
+    return make_pair(d*d,  2.0*d);
+}
+
+
+inline pair<double, double> epsabsloss(const double x, const double y, const double eps)
+{
+    const double d = x - y;
+
+    if (d > eps) {
+        return make_pair(d-eps,  1.0);
+    } else if (d < -eps)
+    {
+        return make_pair(-d-eps,  -1.0);
+    } else {
+        return make_pair(0.0,  0.0);
+    }
+}
+
+
+// loss for binary classification (0/1 coding), errors only linear with eps margin
+inline pair<double, double> epsclassloss(const double x, const double y, const double eps)
+{
+    if (x) {
+        const double d = x - y;  // when x (desired) is greater than y, we have a loss
+        
+        if (d > eps) 
+            return make_pair(d-eps,  1.0);
+        else    
+            return make_pair(0.0,  0.0);
+    } else {
+          const double d = y - x;  // when x (desired) is lower than y, we have a loss
+        
+            if (d > eps) 
+                return make_pair(d-eps,  -1.0);
+            else    
+                return make_pair(0.0,  0.0);
+    }
+}
+
+
+// take negative log-likelihood function for binary classification, x must be 0 for class 0 and 1 for class 1
+inline pair<double, double> logitloss(const double x, const double y, const double eps)
+{
+    const double q = exp(y);
+    const double p = q / (1.0 + q);
+    
+    
+    if (x) {
+        if ((p+eps) >= 1.0) {
+            return make_pair(0.0, 0.0);         
+        } else {
+            return make_pair(-log(p+eps), p/((1+q)*(p+eps)));         
+        }
+    } else {
+        if ((1.0-p+eps) >= 1.0) {
+            return make_pair(0.0, 0.0);         
+        } else {
+            return make_pair(-log(1.0-p+eps), -p/((1+q)*(1.0-p+eps)));         
+        }
+    }
+}
+
+// Fast activation function (piecewise linear activation function)
+
+inline double pl(const double x)
+{
+    if (x < 0.5)
+        return x;
+    else if (x < 1.5)
+        return 0.5 + 0.5*(x-0.5);
+    else if (x < 4.5)
+        return 1.0 + 0.05 * (x-1.5);
+    else 
+        return 1.15 + 0.01 * (x-4.5);    
+}
+
+inline double pld(const double x)
+{
+    if (x < 0.5)
+        return 1.0;
+    else if (x < 1.5)
+        return 0.5;
+    else if (x < 4.5)
+        return 0.05;
+    else
+        return 0.01;    
+}
+
+inline double piecewice_linear(const double x) 
+{
+
+        if (x >= 0)
+            return pl(x);
+        else
+            return -pl(-x);
+}
+
+inline double piecewice_linear_derivative(const double x) 
+{
+    if (x >= 0)
+        return pld(x);
+    else
+        return pld(-x);
+}
+
+inline pair<double, double> sigmoid(const double x) 
+{
+    const double q = sigmoid_tanh(x);
+    return make_pair(q + 0.05 * x, 1.05 - q * q);
+}
+
+inline pair<double, double> rbf(const double x) 
+{
+    const double p = sigmoid_exp(-x*x);
+    const double q = sigmoid_tanh(x);
+    return make_pair(p - 0.02 * q * x, -2*x*p - 0.02 * (q + x * (1.0- q*q)));
+}
+
+template<class iterator>
+pair<vector<double>, vector<double> > forward(iterator input, const layer& lay)
+{
+    vector<double> z(lay.nr_outputs);
+    vector<double> zder(lay.nr_outputs);
+    
+    vector<state>::const_iterator it = lay.weights.begin();
+    
+    for(long j=0; j < lay.nr_outputs; j++) {
+        z[j] = (*(it++)).weight; 
+        for(long i=0; i < lay.nr_inputs-1; i++) {
+            z[j] += input[i] * (*(it++)).weight;
+        }
+        
+        if lay.nonlinearity {
+            const pair<double, double> act = sigmoid(z[j]);
+        
+            z[j] = act.first;   // piecewice_linear(z[j]);
+            zder[j] = act.second; // piecewice_linear_derivative(z[j]);
+        } else {
+    }
+    
+    return make_pair(z, zder);
+}
+
+
+#ifndef PERCEPTRON_CALC
+template<class iterator>
+vector<double> backward(vector<double> gprevious, const vector<double>& zder, iterator input, layer& lay)
+{
+    vector<double> g(lay.nr_inputs-1, 0.0);
+    
+    vector<state>::iterator it = lay.weights.begin();
+    
+    for(long j=0; j < lay.nr_outputs; j++) {
+        gprevious[j] *= zder[j];
+        
+        (*(it++)).grad += gprevious[j];
+        for(long i=0; i < lay.nr_inputs-1; i++) {
+            g[i] += gprevious[j] * (*(it)).weight;
+            (*it).grad += gprevious[j] * input[i];
+            
+            it++;    
+        }
+    }
+    
+    return g;       // give gradient information back to previous layer
+}
+#endif
+
+
+//void backpropagate_gradient(const double d, network& net, const molecule& mol, 
+//    const vector<vector<double> >& zouter, const vector< vector<double> >& zder);
+    
+#endif
+
